@@ -1,0 +1,15 @@
+bin/
+data/
+.env
+.git/
+.gitignore
+.idea/
+.vscode/
+*.exe
+*.db
+*.db-wal
+*.db-shm
+Makefile
+README.md
+DEPLOY.md
+**/*_test.go
