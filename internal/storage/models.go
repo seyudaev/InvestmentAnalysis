@@ -30,3 +30,11 @@ type UserState struct {
 	State     string // "", "awaiting_token"
 	UpdatedAt time.Time
 }
+
+type WatchItem struct {
+	ID        int64
+	UserID    int64
+	Ticker    string
+	CreatedAt time.Time
+}
+

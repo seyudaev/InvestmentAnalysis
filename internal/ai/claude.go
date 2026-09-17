@@ -23,6 +23,10 @@ func (c *Claude) AnswerQuestion(ctx context.Context, portfolioData, question str
 	return c.chat(ctx, questionSystemPrompt, userMsg)
 }
 
+func (c *Claude) AnalyzeWatchlist(ctx context.Context, tickers []string, question string) (string, error) {
+	return c.chat(ctx, watchlistSystemPrompt, FormatWatchlistPrompt(tickers, question))
+}
+
 func (c *Claude) chat(ctx context.Context, system, user string) (string, error) {
 	body := map[string]any{
 		"model":      c.model,

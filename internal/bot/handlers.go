@@ -54,6 +54,12 @@ func (b *Bot) Register() {
 	b.tb.Handle("/settings", b.handleSettings)
 	b.tb.Handle("/setallocation", b.handleSetAllocation)
 	b.tb.Handle("/ask", b.handleAsk)
+	b.tb.Handle("/watchlist", b.handleWatchlist)
+	b.tb.Handle("/watch", b.handleWatchSet)
+	b.tb.Handle("/watchadd", b.handleWatchAdd)
+	b.tb.Handle("/watchdel", b.handleWatchDel)
+	b.tb.Handle("/watchclear", b.handleWatchClear)
+	b.tb.Handle("/advise", b.handleAdvise)
 
 	b.tb.Handle(tele.OnText, b.handleText)
 }
@@ -61,37 +67,39 @@ func (b *Bot) Register() {
 func (b *Bot) handleStart(c tele.Context) error {
 	msg := `👋 *Investment Analysis Bot*
 
-Я помогу анализировать ваш портфель T-Инвестиций и давать рекомендации по ребалансировке.
+Анализ портфеля T-Инвестиций и советы AI по выбранным компаниям.
 
-*Команды:*
-/connect — подключить T-Bank API
-/portfolio — текущий портфель
-/signals — сигналы buy/hold/sell
-/rebalance — рекомендации по ребалансировке
-/settings — настройки аллокации
-/setallocation — задать целевую аллокацию
-/ask — задать вопрос AI
-/help — справка
+*Без брокера (watchlist):*
+/watch SBER GAZP LKOH — задать список компаний
+/watchlist — показать список
+/advise — AI-советы по списку
 
-Начните с /connect`
+*С T-Bank:*
+/connect — подключить API
+/portfolio — портфель
+/rebalance — ребалансировка
+
+/help — полная справка`
 	return c.Send(msg, tele.ModeMarkdown)
 }
 
 func (b *Bot) handleHelp(c tele.Context) error {
 	return c.Send(`*Справка*
 
-1. Получите API-токен T-Инвестиций (только чтение):
-   Приложение T-Инвестиции → Настройки → API для инвестиций
+*Watchlist (без T-Bank):*
+/watch SBER GAZP YNDX — задать список тикеров
+/watchadd TICKER — добавить
+/watchdel TICKER — удалить
+/watchlist — показать
+/watchclear — очистить
+/advise — AI-обзор по списку
+/advise Стоит ли докупать? — вопрос по списку
 
-2. /connect — введите токен
-
-3. /setallocation share:50 bond:30 etf:10 currency:10
-   Задайте целевую аллокацию (сумма = 100%)
-
-4. /portfolio — просмотр портфеля
-   /signals — торговые сигналы
-   /rebalance — AI-рекомендации
-   /ask Покупать ли Сбер? — вопрос AI`, tele.ModeMarkdown)
+*Портфель T-Bank:*
+/connect — токен API (только чтение)
+/portfolio /signals /rebalance
+/setallocation share:50 bond:30 etf:10 currency:10
+/ask вопрос — вопрос AI (портфель или watchlist)`, tele.ModeMarkdown)
 }
 
 func (b *Bot) handleConnect(c tele.Context) error {
@@ -261,22 +269,185 @@ func (b *Bot) handleAsk(c tele.Context) error {
 		return c.Send("Использование: /ask Стоит ли докупать Сбер?")
 	}
 
-	analysis, err := b.fetchAnalysis(c)
-	if err != nil {
-		return c.Send("❌ " + err.Error())
-	}
-
 	if err := c.Send("🤖 Думаю..."); err != nil {
 		return err
 	}
 
-	data := analytics.FormatRebalanceData(*analysis)
-	answer, err := b.ai.AnswerQuestion(context.Background(), data, question)
-	if err != nil {
-		return c.Send("Ошибка AI: " + err.Error())
+	// Prefer portfolio if T-Bank connected; otherwise use watchlist
+	analysis, err := b.fetchAnalysis(c)
+	if err == nil {
+		data := analytics.FormatRebalanceData(*analysis)
+		answer, err := b.ai.AnswerQuestion(context.Background(), data, question)
+		if err != nil {
+			return c.Send("❌ Ошибка AI. Проверьте модель и guardrails OpenRouter.")
+		}
+		return b.sendLongMessage(c, answer)
 	}
 
+	tickers, werr := b.getWatchTickers(c)
+	if werr != nil || len(tickers) == 0 {
+		return c.Send("❌ Нет данных портфеля и пустой watchlist.\n\nПодключите /connect или задайте компании: /watch SBER GAZP LKOH")
+	}
+
+	answer, aerr := b.ai.AnalyzeWatchlist(context.Background(), tickers, question)
+	if aerr != nil {
+		return c.Send("❌ Ошибка AI. Проверьте модель и guardrails OpenRouter.")
+	}
 	return b.sendLongMessage(c, answer)
+}
+
+func (b *Bot) handleWatchlist(c tele.Context) error {
+	user, err := b.store.GetOrCreateUser(c.Sender().ID)
+	if err != nil {
+		return c.Send("Ошибка: " + err.Error())
+	}
+
+	items, err := b.store.GetWatchlist(user.ID)
+	if err != nil {
+		return c.Send("Ошибка: " + err.Error())
+	}
+	if len(items) == 0 {
+		return c.Send("Watchlist пуст.\nЗадайте: /watch SBER GAZP LKOH")
+	}
+
+	var sb strings.Builder
+	sb.WriteString("*Ваш watchlist:*\n")
+	for i, item := range items {
+		fmt.Fprintf(&sb, "%d. `%s`\n", i+1, item.Ticker)
+	}
+	sb.WriteString("\nAI-советы: /advise")
+	return c.Send(sb.String(), tele.ModeMarkdown)
+}
+
+func (b *Bot) handleWatchSet(c tele.Context) error {
+	user, err := b.store.GetOrCreateUser(c.Sender().ID)
+	if err != nil {
+		return c.Send("Ошибка: " + err.Error())
+	}
+
+	raw := strings.TrimSpace(c.Message().Payload)
+	if raw == "" {
+		return c.Send("Использование: /watch SBER GAZP LKOH\nили: /watch SBER,GAZP,LKOH")
+	}
+
+	tickers := parseTickers(raw)
+	if len(tickers) == 0 {
+		return c.Send("Не удалось распознать тикеры.")
+	}
+	if len(tickers) > 30 {
+		return c.Send("Слишком много тикеров (макс. 30).")
+	}
+
+	if err := b.store.SetWatchlist(user.ID, tickers); err != nil {
+		return c.Send("Ошибка сохранения: " + err.Error())
+	}
+
+	return c.Send(fmt.Sprintf("✅ Watchlist сохранён (%d): %s\n\nДальше: /advise", len(tickers), strings.Join(tickers, ", ")))
+}
+
+func (b *Bot) handleWatchAdd(c tele.Context) error {
+	user, err := b.store.GetOrCreateUser(c.Sender().ID)
+	if err != nil {
+		return c.Send("Ошибка: " + err.Error())
+	}
+
+	tickers := parseTickers(c.Message().Payload)
+	if len(tickers) == 0 {
+		return c.Send("Использование: /watchadd SBER")
+	}
+
+	for _, t := range tickers {
+		if err := b.store.AddWatchTicker(user.ID, t); err != nil {
+			return c.Send("Ошибка: " + err.Error())
+		}
+	}
+	return c.Send("✅ Добавлено. Список: /watchlist")
+}
+
+func (b *Bot) handleWatchDel(c tele.Context) error {
+	user, err := b.store.GetOrCreateUser(c.Sender().ID)
+	if err != nil {
+		return c.Send("Ошибка: " + err.Error())
+	}
+
+	tickers := parseTickers(c.Message().Payload)
+	if len(tickers) == 0 {
+		return c.Send("Использование: /watchdel SBER")
+	}
+
+	for _, t := range tickers {
+		_ = b.store.RemoveWatchTicker(user.ID, t)
+	}
+	return c.Send("✅ Удалено. Список: /watchlist")
+}
+
+func (b *Bot) handleWatchClear(c tele.Context) error {
+	user, err := b.store.GetOrCreateUser(c.Sender().ID)
+	if err != nil {
+		return c.Send("Ошибка: " + err.Error())
+	}
+	if err := b.store.ClearWatchlist(user.ID); err != nil {
+		return c.Send("Ошибка: " + err.Error())
+	}
+	return c.Send("✅ Watchlist очищен.")
+}
+
+func (b *Bot) handleAdvise(c tele.Context) error {
+	if !b.hasAI {
+		return c.Send("AI-провайдер не настроен. Добавьте API-ключ в .env")
+	}
+
+	tickers, err := b.getWatchTickers(c)
+	if err != nil {
+		return c.Send("Ошибка: " + err.Error())
+	}
+	if len(tickers) == 0 {
+		return c.Send("Watchlist пуст.\nСначала: /watch SBER GAZP LKOH")
+	}
+
+	question := strings.TrimSpace(c.Message().Payload)
+	if err := c.Send(fmt.Sprintf("🤖 Анализирую: %s", strings.Join(tickers, ", "))); err != nil {
+		return err
+	}
+
+	answer, err := b.ai.AnalyzeWatchlist(context.Background(), tickers, question)
+	if err != nil {
+		return c.Send("❌ Ошибка AI. Проверьте модель и guardrails OpenRouter (ZDR / Data Training).")
+	}
+	return b.sendLongMessage(c, "📋 *Советы по watchlist:*\n\n"+answer)
+}
+
+func (b *Bot) getWatchTickers(c tele.Context) ([]string, error) {
+	user, err := b.store.GetOrCreateUser(c.Sender().ID)
+	if err != nil {
+		return nil, err
+	}
+	items, err := b.store.GetWatchlist(user.ID)
+	if err != nil {
+		return nil, err
+	}
+	tickers := make([]string, 0, len(items))
+	for _, item := range items {
+		tickers = append(tickers, item.Ticker)
+	}
+	return tickers, nil
+}
+
+func parseTickers(raw string) []string {
+	raw = strings.ReplaceAll(raw, ",", " ")
+	raw = strings.ReplaceAll(raw, ";", " ")
+	parts := strings.Fields(raw)
+	seen := make(map[string]bool)
+	var out []string
+	for _, p := range parts {
+		t := strings.ToUpper(strings.Trim(p, ".,;"))
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	return out
 }
 
 func (b *Bot) handleText(c tele.Context) error {

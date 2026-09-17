@@ -24,6 +24,11 @@ func (y *Yandex) AnswerQuestion(ctx context.Context, portfolioData, question str
 	return y.chat(ctx, userMsg)
 }
 
+func (y *Yandex) AnalyzeWatchlist(ctx context.Context, tickers []string, question string) (string, error) {
+	userMsg := watchlistSystemPrompt + "\n\n" + FormatWatchlistPrompt(tickers, question)
+	return y.chat(ctx, userMsg)
+}
+
 func (y *Yandex) chat(ctx context.Context, text string) (string, error) {
 	modelURI := fmt.Sprintf("gpt://%s/%s/latest", y.folderID, y.model)
 	body := map[string]any{

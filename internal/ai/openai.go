@@ -44,6 +44,10 @@ func (o *OpenAICompatible) AnswerQuestion(ctx context.Context, portfolioData, qu
 	return o.chat(ctx, questionSystemPrompt, userMsg)
 }
 
+func (o *OpenAICompatible) AnalyzeWatchlist(ctx context.Context, tickers []string, question string) (string, error) {
+	return o.chat(ctx, watchlistSystemPrompt, FormatWatchlistPrompt(tickers, question))
+}
+
 func (o *OpenAICompatible) chat(ctx context.Context, system, user string) (string, error) {
 	body := map[string]any{
 		"model": o.model,

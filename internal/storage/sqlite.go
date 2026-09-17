@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -68,6 +69,14 @@ CREATE TABLE IF NOT EXISTS user_states (
     user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
     state       TEXT NOT NULL DEFAULT '',
     updated_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS watchlist (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    ticker      TEXT NOT NULL,
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, ticker)
 );
 `
 	_, err := s.db.Exec(schema)
@@ -191,3 +200,80 @@ func (s *Store) DeleteTargetAllocations(userID int64) error {
 	_, err := s.db.Exec(`DELETE FROM target_allocations WHERE user_id = ?`, userID)
 	return err
 }
+
+func (s *Store) AddWatchTicker(userID int64, ticker string) error {
+	ticker = normalizeTicker(ticker)
+	if ticker == "" {
+		return fmt.Errorf("empty ticker")
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO watchlist (user_id, ticker)
+		VALUES (?, ?)
+		ON CONFLICT(user_id, ticker) DO NOTHING
+	`, userID, ticker)
+	return err
+}
+
+func (s *Store) RemoveWatchTicker(userID int64, ticker string) error {
+	_, err := s.db.Exec(`DELETE FROM watchlist WHERE user_id = ? AND ticker = ?`, userID, normalizeTicker(ticker))
+	return err
+}
+
+func (s *Store) ClearWatchlist(userID int64) error {
+	_, err := s.db.Exec(`DELETE FROM watchlist WHERE user_id = ?`, userID)
+	return err
+}
+
+func (s *Store) SetWatchlist(userID int64, tickers []string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM watchlist WHERE user_id = ?`, userID); err != nil {
+		return err
+	}
+
+	seen := make(map[string]bool)
+	for _, t := range tickers {
+		t = normalizeTicker(t)
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		if _, err := tx.Exec(`INSERT INTO watchlist (user_id, ticker) VALUES (?, ?)`, userID, t); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) GetWatchlist(userID int64) ([]WatchItem, error) {
+	rows, err := s.db.Query(`
+		SELECT id, user_id, ticker, created_at
+		FROM watchlist WHERE user_id = ?
+		ORDER BY ticker
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []WatchItem
+	for rows.Next() {
+		var w WatchItem
+		if err := rows.Scan(&w.ID, &w.UserID, &w.Ticker, &w.CreatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, w)
+	}
+	return items, rows.Err()
+}
+
+func normalizeTicker(t string) string {
+	t = strings.TrimSpace(strings.ToUpper(t))
+	t = strings.Trim(t, ",;")
+	return t
+}
+
