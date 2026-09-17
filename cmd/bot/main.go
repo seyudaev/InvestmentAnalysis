@@ -52,7 +52,10 @@ func main() {
 		log.Fatalf("telegram: %v", err)
 	}
 
-	tinkoffClient := tinkoff.NewClient(cfg.TBankEndpoint)
+	tinkoffClient := tinkoff.NewClient(cfg.TBankEndpoint, cfg.TBankTLSInsecure)
+	if cfg.TBankTLSInsecure {
+		log.Println("T-Bank TLS: InsecureSkipVerify enabled (set TBANK_TLS_INSECURE=false to enforce cert check)")
+	}
 
 	hasAI, aiProvider := initAI(cfg)
 

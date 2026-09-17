@@ -301,14 +301,18 @@ func (b *Bot) handleText(c tele.Context) error {
 	}
 
 	token := strings.TrimSpace(text)
+	token = strings.Trim(token, `"'`)
 	if len(token) < 10 {
 		return c.Send("Токен слишком короткий. Попробуйте ещё раз или /cancel")
+	}
+	if !strings.HasPrefix(token, "t.") {
+		return c.Send("❌ Похоже, это не токен T-Invest API.\nТокен обычно начинается с t.\n\nПопробуйте ещё раз или /cancel")
 	}
 
 	// Validate token by fetching accounts
 	accounts, err := b.tinkoff.GetAccounts(context.Background(), token)
 	if err != nil {
-		return c.Send("❌ Не удалось проверить токен: " + err.Error() + "\n\nПопробуйте ещё раз или /cancel")
+		return c.Send("❌ Не удалось проверить токен T-Bank.\nПроверьте, что токен с правами «только чтение» и отправлен целиком одним сообщением.\n\nПопробуйте ещё раз или /cancel")
 	}
 
 	tokenEnc, err := b.crypto.Encrypt(token)

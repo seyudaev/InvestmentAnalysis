@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -21,6 +22,7 @@ type Config struct {
 	YandexModel    string
 	DBPath         string
 	TBankEndpoint  string
+	TBankTLSInsecure bool
 	DigestHour     int
 	ProxyURL       string
 }
@@ -39,10 +41,11 @@ func Load() (*Config, error) {
 		YandexKey:      os.Getenv("YANDEX_API_KEY"),
 		YandexFolderID: os.Getenv("YANDEX_FOLDER_ID"),
 		YandexModel:    envOr("YANDEX_MODEL", "yandexgpt"),
-		DBPath:         envOr("DB_PATH", "./data/investment.db"),
-		TBankEndpoint:  envOr("TBANK_ENDPOINT", "invest-public-api.tinkoff.ru:443"),
-		DigestHour:     envInt("DIGEST_HOUR", 9),
-		ProxyURL:       envOr("PROXY_URL", os.Getenv("ALL_PROXY")),
+		DBPath:           envOr("DB_PATH", "./data/investment.db"),
+		TBankEndpoint:    envOr("TBANK_ENDPOINT", "invest-public-api.tinkoff.ru:443"),
+		TBankTLSInsecure: envBool("TBANK_TLS_INSECURE", true),
+		DigestHour:       envInt("DIGEST_HOUR", 9),
+		ProxyURL:         envOr("PROXY_URL", os.Getenv("ALL_PROXY")),
 	}
 
 	if cfg.TelegramToken == "" {
@@ -72,4 +75,19 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+func envBool(key string, fallback bool) bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if v == "" {
+		return fallback
+	}
+	switch v {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return fallback
+	}
 }

@@ -2,47 +2,80 @@ package tinkoff
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"log"
+	"strings"
 
 	"github.com/seyud/investment-analysis/internal/analytics"
-	investgo "github.com/tinkoff/invest-api-go-sdk/investgo"
 	pb "github.com/tinkoff/invest-api-go-sdk/proto"
+	"golang.org/x/oauth2"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/oauth"
+	"google.golang.org/grpc/metadata"
+)
+
+const (
+	defaultEndpoint = "invest-public-api.tinkoff.ru:443"
+	appName         = "investment-analysis-bot"
 )
 
 type Client struct {
-	endpoint string
+	endpoint   string
+	tlsInsecure bool
 }
 
-func NewClient(endpoint string) *Client {
-	return &Client{endpoint: endpoint}
+func NewClient(endpoint string, tlsInsecure bool) *Client {
+	return &Client{
+		endpoint:    normalizeEndpoint(endpoint),
+		tlsInsecure: tlsInsecure,
+	}
+}
+
+type grpcSession struct {
+	conn *grpc.ClientConn
+	ctx  context.Context
+}
+
+func (s *grpcSession) Close() {
+	if s.conn != nil {
+		_ = s.conn.Close()
+	}
 }
 
 func (c *Client) GetPortfolio(ctx context.Context, token, accountID string) (*analytics.PortfolioSnapshot, error) {
-	client, err := c.newSDKClient(ctx, token)
+	session, err := c.dial(ctx, token)
 	if err != nil {
 		return nil, err
 	}
-	defer client.Stop()
+	defer session.Close()
+
+	users := pb.NewUsersServiceClient(session.conn)
+	ops := pb.NewOperationsServiceClient(session.conn)
+	instruments := pb.NewInstrumentsServiceClient(session.conn)
 
 	if accountID == "" {
-		accountID, err = c.firstAccountID(client)
+		accountID, err = firstAccountID(session.ctx, users)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	opsClient := client.NewOperationsServiceClient()
-	portfolioResp, err := opsClient.GetPortfolio(accountID, pb.PortfolioRequest_RUB)
+	portfolioResp, err := ops.GetPortfolio(session.ctx, &pb.PortfolioRequest{
+		AccountId: accountID,
+		Currency:  pb.PortfolioRequest_RUB,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("get portfolio: %w", err)
 	}
 
-	positionsResp, err := opsClient.GetPositions(accountID)
+	positionsResp, err := ops.GetPositions(session.ctx, &pb.PositionsRequest{
+		AccountId: accountID,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("get positions: %w", err)
 	}
-
-	instrumentsClient := client.NewInstrumentsServiceClient()
 
 	snapshot := &analytics.PortfolioSnapshot{
 		AccountID: accountID,
@@ -52,13 +85,12 @@ func (c *Client) GetPortfolio(ctx context.Context, token, accountID string) (*an
 	if total := portfolioResp.GetTotalAmountPortfolio(); total != nil {
 		snapshot.TotalValue = total.ToFloat()
 	}
-
 	if y := portfolioResp.GetExpectedYield(); y != nil {
 		snapshot.ExpectedYield = y.ToFloat()
 	}
 
 	for _, p := range portfolioResp.GetPositions() {
-		pos := c.parsePortfolioPosition(p, instrumentsClient)
+		pos := parsePortfolioPosition(session.ctx, p, instruments)
 		if pos.Quantity > 0 || pos.TotalValue > 0 {
 			snapshot.Positions = append(snapshot.Positions, pos)
 		}
@@ -78,7 +110,6 @@ func (c *Client) GetPortfolio(ctx context.Context, token, accountID string) (*an
 		}
 	}
 
-	// Recalculate total if portfolio total is zero
 	if snapshot.TotalValue == 0 {
 		for _, p := range snapshot.Positions {
 			snapshot.TotalValue += p.TotalValue
@@ -89,19 +120,19 @@ func (c *Client) GetPortfolio(ctx context.Context, token, accountID string) (*an
 }
 
 func (c *Client) GetAccounts(ctx context.Context, token string) ([]AccountInfo, error) {
-	client, err := c.newSDKClient(ctx, token)
+	session, err := c.dial(ctx, token)
 	if err != nil {
 		return nil, err
 	}
-	defer client.Stop()
+	defer session.Close()
 
-	accountsResp, err := client.NewUsersServiceClient().GetAccounts()
+	resp, err := pb.NewUsersServiceClient(session.conn).GetAccounts(session.ctx, &pb.GetAccountsRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("get accounts: %w", err)
 	}
 
 	var result []AccountInfo
-	for _, a := range accountsResp.GetAccounts() {
+	for _, a := range resp.GetAccounts() {
 		result = append(result, AccountInfo{
 			ID:   a.GetId(),
 			Name: a.GetName(),
@@ -117,33 +148,64 @@ type AccountInfo struct {
 	Type string
 }
 
-func (c *Client) newSDKClient(ctx context.Context, token string) (*investgo.Client, error) {
-	cfg := investgo.Config{
-		EndPoint: c.endpoint,
-		Token:    token,
-		AppName:  "investment-analysis-bot",
+func (c *Client) dial(ctx context.Context, token string) (*grpcSession, error) {
+	token = sanitizeToken(token)
+	if token == "" {
+		return nil, fmt.Errorf("empty API token")
 	}
 
-	client, err := investgo.NewClient(ctx, cfg, newSDKLogger())
+	endpoint := normalizeEndpoint(c.endpoint)
+
+	conn, err := c.grpcDial(endpoint, token, c.tlsInsecure)
+	if err != nil && !c.tlsInsecure && isTLSVerifyError(err) {
+		log.Printf("[tinkoff] TLS verify failed (%v), retrying with InsecureSkipVerify", err)
+		conn, err = c.grpcDial(endpoint, token, true)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("create tinkoff client: %w", err)
 	}
-	return client, nil
+
+	rpcCtx := metadata.AppendToOutgoingContext(ctx, "x-app-name", appName)
+	return &grpcSession{conn: conn, ctx: rpcCtx}, nil
 }
 
-func (c *Client) firstAccountID(client *investgo.Client) (string, error) {
-	accountsResp, err := client.NewUsersServiceClient().GetAccounts()
+func (c *Client) grpcDial(endpoint, token string, insecureSkipVerify bool) (*grpc.ClientConn, error) {
+	tlsCfg := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: insecureSkipVerify, //nolint:gosec // optional fallback for broken CA bundles
+	}
+
+	return grpc.Dial(endpoint,
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithPerRPCCredentials(oauth.TokenSource{
+			TokenSource: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token}),
+		}),
+	)
+}
+
+func isTLSVerifyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "certificate") ||
+		strings.Contains(msg, "x509") ||
+		strings.Contains(msg, "authentication handshake failed")
+}
+
+func firstAccountID(ctx context.Context, users pb.UsersServiceClient) (string, error) {
+	resp, err := users.GetAccounts(ctx, &pb.GetAccountsRequest{})
 	if err != nil {
 		return "", fmt.Errorf("get accounts: %w", err)
 	}
-	accounts := accountsResp.GetAccounts()
+	accounts := resp.GetAccounts()
 	if len(accounts) == 0 {
 		return "", fmt.Errorf("no accounts found")
 	}
 	return accounts[0].GetId(), nil
 }
 
-func (c *Client) parsePortfolioPosition(p *pb.PortfolioPosition, ic *investgo.InstrumentsServiceClient) analytics.Position {
+func parsePortfolioPosition(ctx context.Context, p *pb.PortfolioPosition, instruments pb.InstrumentsServiceClient) analytics.Position {
 	figi := p.GetFigi()
 	qty := quotationToFloat(p.GetQuantity())
 	currentPrice := moneyToFloat(p.GetCurrentPrice())
@@ -164,21 +226,30 @@ func (c *Client) parsePortfolioPosition(p *pb.PortfolioPosition, ic *investgo.In
 	}
 
 	if figi != "" {
-		if share, err := ic.ShareByFigi(figi); err == nil && share.GetInstrument() != nil {
+		if share, err := instruments.ShareBy(ctx, &pb.InstrumentRequest{
+			IdType: pb.InstrumentIdType_INSTRUMENT_ID_TYPE_FIGI,
+			Id:     figi,
+		}); err == nil && share.GetInstrument() != nil {
 			inst := share.GetInstrument()
 			pos.Ticker = inst.GetTicker()
 			pos.Name = inst.GetName()
 			pos.AssetType = analytics.AssetShare
 			return pos
 		}
-		if bond, err := ic.BondByFigi(figi); err == nil && bond.GetInstrument() != nil {
+		if bond, err := instruments.BondBy(ctx, &pb.InstrumentRequest{
+			IdType: pb.InstrumentIdType_INSTRUMENT_ID_TYPE_FIGI,
+			Id:     figi,
+		}); err == nil && bond.GetInstrument() != nil {
 			inst := bond.GetInstrument()
 			pos.Ticker = inst.GetTicker()
 			pos.Name = inst.GetName()
 			pos.AssetType = analytics.AssetBond
 			return pos
 		}
-		if etf, err := ic.EtfByFigi(figi); err == nil && etf.GetInstrument() != nil {
+		if etf, err := instruments.EtfBy(ctx, &pb.InstrumentRequest{
+			IdType: pb.InstrumentIdType_INSTRUMENT_ID_TYPE_FIGI,
+			Id:     figi,
+		}); err == nil && etf.GetInstrument() != nil {
 			inst := etf.GetInstrument()
 			pos.Ticker = inst.GetTicker()
 			pos.Name = inst.GetName()
@@ -191,8 +262,29 @@ func (c *Client) parsePortfolioPosition(p *pb.PortfolioPosition, ic *investgo.In
 		pos.Ticker = figi
 		pos.Name = figi
 	}
-
 	return pos
+}
+
+func normalizeEndpoint(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	endpoint = strings.TrimPrefix(endpoint, "https://")
+	endpoint = strings.TrimPrefix(endpoint, "http://")
+
+	if endpoint == "" || looksLikeToken(endpoint) || !strings.Contains(endpoint, ":") {
+		return defaultEndpoint
+	}
+	return endpoint
+}
+
+func sanitizeToken(token string) string {
+	token = strings.TrimSpace(token)
+	token = strings.Trim(token, `"'`)
+	token = strings.TrimPrefix(token, "Bearer ")
+	return strings.TrimSpace(token)
+}
+
+func looksLikeToken(s string) bool {
+	return strings.HasPrefix(s, "t.") && len(s) > 40 && !strings.Contains(s, ":")
 }
 
 func mapInstrumentType(t string) analytics.AssetType {
