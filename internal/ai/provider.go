@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/seyud/investment-analysis/internal/analytics"
 )
@@ -15,23 +16,27 @@ func NewProvider(providerType string, cfg ProviderConfig) (Provider, error) {
 	switch providerType {
 	case "openai":
 		return NewOpenAI(cfg.OpenAIKey, cfg.OpenAIModel), nil
+	case "openrouter":
+		return NewOpenRouter(cfg.OpenRouterKey, cfg.OpenRouterModel), nil
 	case "claude":
 		return NewClaude(cfg.AnthropicKey, cfg.AnthropicModel), nil
 	case "yandex":
 		return NewYandex(cfg.YandexKey, cfg.YandexFolderID, cfg.YandexModel), nil
 	default:
-		return NewOpenAI(cfg.OpenAIKey, cfg.OpenAIModel), nil
+		return nil, fmt.Errorf("unknown AI provider: %s (use openai, openrouter, claude, yandex)", providerType)
 	}
 }
 
 type ProviderConfig struct {
-	OpenAIKey      string
-	OpenAIModel    string
-	AnthropicKey   string
-	AnthropicModel string
-	YandexKey      string
-	YandexFolderID string
-	YandexModel    string
+	OpenAIKey        string
+	OpenAIModel      string
+	OpenRouterKey    string
+	OpenRouterModel  string
+	AnthropicKey     string
+	AnthropicModel   string
+	YandexKey        string
+	YandexFolderID   string
+	YandexModel      string
 }
 
 const disclaimer = "\n\n_⚠️ Это не является индивидуальной инвестиционной рекомендацией. Принимайте решения самостоятельно._"

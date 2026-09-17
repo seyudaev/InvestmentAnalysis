@@ -10,21 +10,23 @@ import (
 )
 
 type Config struct {
-	TelegramToken  string
-	EncryptionKey  string
-	AIProvider     string
-	OpenAIKey      string
-	OpenAIModel    string
-	AnthropicKey   string
-	AnthropicModel string
-	YandexKey      string
-	YandexFolderID string
-	YandexModel    string
-	DBPath         string
-	TBankEndpoint  string
+	TelegramToken    string
+	EncryptionKey    string
+	AIProvider       string
+	OpenAIKey        string
+	OpenAIModel      string
+	OpenRouterKey    string
+	OpenRouterModel  string
+	AnthropicKey     string
+	AnthropicModel   string
+	YandexKey        string
+	YandexFolderID   string
+	YandexModel      string
+	DBPath           string
+	TBankEndpoint    string
 	TBankTLSInsecure bool
-	DigestHour     int
-	ProxyURL       string
+	DigestHour       int
+	ProxyURL         string
 }
 
 func Load() (*Config, error) {
@@ -33,14 +35,16 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		TelegramToken:  os.Getenv("TELEGRAM_BOT_TOKEN"),
 		EncryptionKey:  os.Getenv("ENCRYPTION_KEY"),
-		AIProvider:     envOr("AI_PROVIDER", "openai"),
-		OpenAIKey:      os.Getenv("OPENAI_API_KEY"),
-		OpenAIModel:    envOr("OPENAI_MODEL", "gpt-4o"),
-		AnthropicKey:   os.Getenv("ANTHROPIC_API_KEY"),
-		AnthropicModel: envOr("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
-		YandexKey:      os.Getenv("YANDEX_API_KEY"),
-		YandexFolderID: os.Getenv("YANDEX_FOLDER_ID"),
-		YandexModel:    envOr("YANDEX_MODEL", "yandexgpt"),
+		AIProvider:       envOr("AI_PROVIDER", "openai"),
+		OpenAIKey:        os.Getenv("OPENAI_API_KEY"),
+		OpenAIModel:      envOr("OPENAI_MODEL", "gpt-4o"),
+		OpenRouterKey:    os.Getenv("OPENROUTER_API_KEY"),
+		OpenRouterModel:  envOr("OPENROUTER_MODEL", "openai/gpt-4o"),
+		AnthropicKey:     os.Getenv("ANTHROPIC_API_KEY"),
+		AnthropicModel:   envOr("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
+		YandexKey:        os.Getenv("YANDEX_API_KEY"),
+		YandexFolderID:   os.Getenv("YANDEX_FOLDER_ID"),
+		YandexModel:      envOr("YANDEX_MODEL", "yandexgpt"),
 		DBPath:           envOr("DB_PATH", "./data/investment.db"),
 		TBankEndpoint:    envOr("TBANK_ENDPOINT", "invest-public-api.tinkoff.ru:443"),
 		TBankTLSInsecure: envBool("TBANK_TLS_INSECURE", true),

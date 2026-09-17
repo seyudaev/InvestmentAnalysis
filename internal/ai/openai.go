@@ -5,25 +5,46 @@ import (
 	"fmt"
 )
 
-type OpenAI struct {
-	apiKey string
-	model  string
+type OpenAICompatible struct {
+	apiKey  string
+	model   string
+	baseURL string
+	headers map[string]string
 }
 
-func NewOpenAI(apiKey, model string) *OpenAI {
-	return &OpenAI{apiKey: apiKey, model: model}
+func NewOpenAI(apiKey, model string) *OpenAICompatible {
+	return &OpenAICompatible{
+		apiKey:  apiKey,
+		model:   model,
+		baseURL: "https://api.openai.com/v1",
+	}
 }
 
-func (o *OpenAI) AnalyzeRebalance(ctx context.Context, data string) (string, error) {
+func NewOpenRouter(apiKey, model string) *OpenAICompatible {
+	if model == "" {
+		model = "openai/gpt-4o"
+	}
+	return &OpenAICompatible{
+		apiKey:  apiKey,
+		model:   model,
+		baseURL: "https://openrouter.ai/api/v1",
+		headers: map[string]string{
+			"HTTP-Referer": "https://github.com/seyudaev/InvestmentAnalysis",
+			"X-Title":      "Investment Analysis Bot",
+		},
+	}
+}
+
+func (o *OpenAICompatible) AnalyzeRebalance(ctx context.Context, data string) (string, error) {
 	return o.chat(ctx, rebalanceSystemPrompt, data)
 }
 
-func (o *OpenAI) AnswerQuestion(ctx context.Context, portfolioData, question string) (string, error) {
+func (o *OpenAICompatible) AnswerQuestion(ctx context.Context, portfolioData, question string) (string, error) {
 	userMsg := fmt.Sprintf("Данные портфеля:\n%s\n\nВопрос: %s", portfolioData, question)
 	return o.chat(ctx, questionSystemPrompt, userMsg)
 }
 
-func (o *OpenAI) chat(ctx context.Context, system, user string) (string, error) {
+func (o *OpenAICompatible) chat(ctx context.Context, system, user string) (string, error) {
 	body := map[string]any{
 		"model": o.model,
 		"messages": []map[string]string{
@@ -33,8 +54,14 @@ func (o *OpenAI) chat(ctx context.Context, system, user string) (string, error) 
 		"temperature": 0.3,
 	}
 
-	respBody, err := doChatRequest(ctx, "https://api.openai.com/v1/chat/completions",
-		map[string]string{"Authorization": "Bearer " + o.apiKey}, body)
+	headers := map[string]string{
+		"Authorization": "Bearer " + o.apiKey,
+	}
+	for k, v := range o.headers {
+		headers[k] = v
+	}
+
+	respBody, err := doChatRequest(ctx, o.baseURL+"/chat/completions", headers, body)
 	if err != nil {
 		return "", err
 	}

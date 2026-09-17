@@ -80,19 +80,23 @@ func main() {
 
 func initAI(cfg *config.Config) (bool, ai.Provider) {
 	providerCfg := ai.ProviderConfig{
-		OpenAIKey:      cfg.OpenAIKey,
-		OpenAIModel:    cfg.OpenAIModel,
-		AnthropicKey:   cfg.AnthropicKey,
-		AnthropicModel: cfg.AnthropicModel,
-		YandexKey:      cfg.YandexKey,
-		YandexFolderID: cfg.YandexFolderID,
-		YandexModel:    cfg.YandexModel,
+		OpenAIKey:       cfg.OpenAIKey,
+		OpenAIModel:     cfg.OpenAIModel,
+		OpenRouterKey:   cfg.OpenRouterKey,
+		OpenRouterModel: cfg.OpenRouterModel,
+		AnthropicKey:    cfg.AnthropicKey,
+		AnthropicModel:  cfg.AnthropicModel,
+		YandexKey:       cfg.YandexKey,
+		YandexFolderID:  cfg.YandexFolderID,
+		YandexModel:     cfg.YandexModel,
 	}
 
 	hasKey := false
 	switch cfg.AIProvider {
 	case "openai":
 		hasKey = cfg.OpenAIKey != ""
+	case "openrouter":
+		hasKey = cfg.OpenRouterKey != ""
 	case "claude":
 		hasKey = cfg.AnthropicKey != ""
 	case "yandex":
